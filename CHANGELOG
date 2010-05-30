@@ -1,0 +1,12 @@
+Changelog from v 0.2.0:
+
+- Fix incorrect zoom in / zoom out behaviour after 'z'
+- Fix stability issues (now image is converted in framebuffer format)
+- More sanity checks
+
+Changelog from v 0.1.1:
+
+- New hotkey "z" zooms image at pixel level (100% zoom)
+- New hotkeys "l" and "r" rotate the image 90 degrees counterclockwise/clockwise
+- No cursor (arrow) on the screen
+
