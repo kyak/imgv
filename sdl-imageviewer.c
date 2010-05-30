@@ -42,8 +42,8 @@ int main(int argc, char *argv[])
 				rightPressed, 
 				upPressed, 
 				downPressed;
-	char			sFilename[255]  = "\0",
-				sVersion[]	= "0.2.1";
+	char *			sFilename;
+	char			sVersion[]	= "0.2.1";
 	double			scale_x 	= 1.0, 
 				scale_y 	= 1.0, 
 				scale 		= 1.0;
@@ -54,10 +54,17 @@ int main(int argc, char *argv[])
 	// Process command line
 	if (argc != 2)
 	{
-		fprintf (stderr, "\n imgv v%s. Syntax: imgv <image file>\n\n Hotkeys:\n 'f' fit to screen\n 'z' zoom at pixel level\n 'i' zoom in  'o' zoom out\n 'l' rotate left  'r' rotate right\n 'arrows' pan  'ESC' quit\n\n", sVersion);
+		fprintf (stderr,  "\n"
+			 " imgv v%s. Syntax: imgv <image file>\n\n"
+			 " Hotkeys:\n"
+			 " 'f' fit to screen\n"
+			 " 'z' zoom at pixel level\n"
+			 " 'i' zoom in  'o' zoom out\n"
+			 " 'l' rotate left  'r' rotate right\n"
+			 " 'arrows' pan  'ESC' quit\n\n", sVersion);
 		exit (1);
 	}
-	strncpy (sFilename, argv[1], 254);
+	sFilename = argv[1];
 
 	// Initialize the SDL library 
 	if (SDL_Init(SDL_INIT_VIDEO) < 0) 
