@@ -1,6 +1,6 @@
 //	imgv, a simple SDL-based image viewer for the Ben Nanonote
-//	Version 0.2.0
-//	Last edited by Fernando Carello <fcarello@libero.it> 2010-05-21
+//	Version 0.2.1
+//	Last edited by Fernando Carello <fcarello@libero.it> 2010-05-24
 //
 #include <stdlib.h>
 #include <unistd.h>
@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
 				upPressed, 
 				downPressed;
 	char			sFilename[255]  = "\0",
-				sVersion[]	= "0.2.0";
+				sVersion[]	= "0.2.1";
 	double			scale_x 	= 1.0, 
 				scale_y 	= 1.0, 
 				scale 		= 1.0;
@@ -67,13 +67,34 @@ int main(int argc, char *argv[])
 	}
 
 	// Load Picture
-	picture = IMG_Load(sFilename);
-
-	if (picture == (SDL_Surface *) (NULL)) 
+	temp_img = IMG_Load(sFilename);
+	if (temp_img == (SDL_Surface *) (NULL)) 
 	{
 		fprintf(stderr, "\n Couldn't load image file %s: %s\n\n", sFilename, SDL_GetError());
 		exit (1);
 	}
+
+	// Set video mode
+	screen = SDL_SetVideoMode 
+		(SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_HWACCEL);
+	if (screen == (SDL_Surface *) (NULL)) 
+	{
+		fprintf(stderr, "Couldn't set %dx%dx%d video mode: %s\n\n", SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_GetError());
+		exit(1);
+	}
+	
+	// Can't stand the useless arrow... Ben has no pointing device
+	SDL_ShowCursor(SDL_DISABLE);	
+
+	// Convert picture in same format as video framebuffer, to optimize blit performances
+	picture = SDL_DisplayFormat (temp_img);
+	if (picture == (SDL_Surface *) (NULL)) 
+	{
+		fprintf(stderr, "\n Internal error from DisplayFormat\n\n");
+		exit (1);
+	}
+	SDL_FreeSurface (temp_img);
+	
 	imgWidth 	= picture->w;
 	imgHeight	= picture->h;
 
@@ -90,16 +111,6 @@ int main(int argc, char *argv[])
 		fprintf (stderr, "\n Error from zoomSurface()\n\n");
 		exit (1);
 	}
-
-	screen = SDL_SetVideoMode 
-		(SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_HWACCEL);
-	if (screen == (SDL_Surface *) (NULL)) 
-	{
-		fprintf(stderr, "Couldn't set %dx%dx%d video mode: %s\n\n", SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_GetError());
-		exit(1);
-	}
-	
-	SDL_ShowCursor(SDL_DISABLE);	// Can't stand the useless arrow... Ben has no pointing device
 	
 	screenPortion.x 	= 0;	// destination coordinates: origin
 	screenPortion.y 	= 0;
@@ -128,7 +139,6 @@ int main(int argc, char *argv[])
 
 	while(1) 
 	{
-
 		if (SDL_WaitEvent( &event ))
 		{
 			// We only process SDL_KEYDOWN and SDL_KEYUP events 
@@ -250,7 +260,13 @@ int main(int argc, char *argv[])
 				pixelFit   = TRUE;
 				picturePortion.w = (Uint16) SCREENWIDTH;
 				picturePortion.h = (Uint16) SCREENHEIGHT;
+				scale 	   = 1.0;
 				scaled_img = SDL_ConvertSurface (picture, picture->format, picture->flags);
+				if (scaled_img == (SDL_Surface *) (NULL))
+				{
+					fprintf (stderr, "\n Error from ConvertSurface()\n\n");
+					exit (1);
+				}
 			}
 			if (iPressed)
 			{	// Zoom in
@@ -260,8 +276,18 @@ int main(int argc, char *argv[])
 				pixelFit   = FALSE;
 				scale += ZOOMSTEP;
 				picturePortion.w = (Uint16) ((double) (imgWidth) * scale);
+				if ( (picturePortion.w - picturePortion.x) >= imgWidth )
+					picturePortion.w = imgWidth - picturePortion.x;
+				if (picturePortion.w < 1)
+					picturePortion.w = 1;
 				picturePortion.h = (Uint16) ((double) (imgHeight) * scale);
+				if ( (picturePortion.h - picturePortion.y) >= imgHeight )
+					picturePortion.h = imgHeight - picturePortion.y;
+				if (picturePortion.h < 1)
+					picturePortion.h = 1;
 				scaled_img = zoomSurface (picture, scale, scale, smoothing);
+				//scaled_img = rotozoomSurface (picture, 0, scale, SMOOTHING_ON);		
+				
 				if (scaled_img == (SDL_Surface *) (NULL))
 				{
 					fprintf (stderr, "\n Error from zoomSurface()\n\n");
@@ -275,11 +301,21 @@ int main(int argc, char *argv[])
 				alreadyFit = FALSE;
 				pixelFit   = FALSE;
 				scale -= ZOOMSTEP;
-				if (scale < 0)
-					scale = 0;
+				if (scale <= 0.0)
+					scale = 0.01;
 				picturePortion.w = (Uint16) ((double) (imgWidth) * scale);
+				if ( (picturePortion.w - picturePortion.x) >= imgWidth)
+					picturePortion.w = imgWidth - picturePortion.x;
+				if (picturePortion.w < 1)
+					picturePortion.w = 1;
 				picturePortion.h = (Uint16) ((double) (imgHeight) * scale);
+				if ( (picturePortion.h - picturePortion.y) >= imgHeight )
+					picturePortion.h = imgHeight - picturePortion.y;
+				if (picturePortion.h < 1)
+					picturePortion.h = 1;
+					
 				scaled_img = zoomSurface (picture, scale, scale, smoothing);
+				//scaled_img = rotozoomSurface (picture, 0, scale, SMOOTHING_ON);
 				if (scaled_img == (SDL_Surface *) (NULL))
 				{
 					fprintf (stderr, "\n Error from zoomSurface()\n\n");
@@ -292,14 +328,16 @@ int main(int argc, char *argv[])
 				if (scaled_img != (SDL_Surface *) (NULL))
 					temp_img   = scaled_img;
 				else
-					temp_img   = picture;
+				{
+					fprintf (stderr, "\n Error: NULL scaled_img\n\n");
+					exit (1);
+				}		
 				alreadyFit = FALSE;
 				scaled_img = rotozoomSurface (temp_img, -90, 1.0, SMOOTHING_OFF);
-				if (temp_img != picture)
-					SDL_FreeSurface (temp_img);
+				SDL_FreeSurface (temp_img);
 				if (scaled_img == (SDL_Surface *) (NULL))
 				{
-					fprintf (stderr, "\n Error from zoomSurface()\n\n");
+					fprintf (stderr, "\n Error from rotozoomSurface()\n\n");
 					exit (1);
 				}		
 			}
@@ -308,14 +346,16 @@ int main(int argc, char *argv[])
 				if (scaled_img != (SDL_Surface *) (NULL))
 					temp_img   = scaled_img;
 				else
-					temp_img   = picture;
+				{
+					fprintf (stderr, "\n Error: NULL scaled_img\n\n");
+					exit (1);
+				}		
 				alreadyFit = FALSE;
 				scaled_img = rotozoomSurface (temp_img, 90, 1.0, SMOOTHING_OFF);
-				if (temp_img != picture)
-					SDL_FreeSurface (temp_img);
+				SDL_FreeSurface (temp_img);
 				if (scaled_img == (SDL_Surface *) (NULL))
 				{
-					fprintf (stderr, "\n Error from zoomSurface()\n\n");
+					fprintf (stderr, "\n Error from rotozoomSurface()\n\n");
 					exit (1);
 				}		
 			}
@@ -349,7 +389,7 @@ int main(int argc, char *argv[])
 				alreadyFit = FALSE;
 			}
 
-			SDL_FillRect(screen, NULL, 0);	// draw background color (black)
+			SDL_FillRect(screen, (SDL_Rect *) NULL, 0);	// draw background color (black)
 			SDL_BlitSurface(scaled_img, &picturePortion, screen, &screenPortion); 
 			SDL_Flip(screen);
 		} // end of if(SDL_WaitEvent())
