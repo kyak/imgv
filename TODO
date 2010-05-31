@@ -1,0 +1,9 @@
+imgv 0.2.2:
+
+- Add ability to view image title (have to figure out how to write text in SDL 
+in a clever way)
+
+imgv 0.3.0:
+
+- Add ability to browse all images in current dir ("imgv all")
+
