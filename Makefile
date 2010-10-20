@@ -5,11 +5,11 @@ TARGETPATH    ?= $(BASEPATH)/staging_dir/target-mipsel_uClibc-0.9.30.1
 
 ####### Compiler, tools and options
 
-CC            = mipsel-openwrt-linux-uclibc-gcc
-STRIP         = mipsel-openwrt-linux-uclibc-strip
+CC            ?= mipsel-openwrt-linux-uclibc-gcc
+STRIP         ?= mipsel-openwrt-linux-uclibc-strip
 CFLAGS        := $(CFLAGS) -pipe -O2 -fomit-frame-pointer -mips32 -mtune=mips32 -funit-at-a-time -fhonour-copts -msoft-float -Wall -W -D_REENTRANT
 INCPATH       = -I$(TARGETPATH)/usr/include/ -I$(TARGETPATH)/usr/include/SDL -I.
-LIBS          = -L$(TARGETPATH)/usr/lib/ -lSDL -lSDL_image -lSDL_gfx -ldirectfb -ldirect -lfusion -lz
+LIBS          = -L$(TARGETPATH)/usr/lib/ -lSDL -lSDL_image -lSDL_gfx -ldirectfb -ldirect -lfusion -lz -lpthread
 
 SOURCE1       = sdl-imageviewer.c
 TARGET1       = imgv

@@ -1,407 +1,454 @@
 //	imgv, a simple SDL-based image viewer for the Ben Nanonote
-//	Version 0.2.1
+//	Version 0.3.0
 //	Last edited by Fernando Carello <fcarello@libero.it> 2010-05-24
+//	Last edited by Niels Kummerfeldt <niels.kummerfeldt@tuhh.de> 2010-10-19
 //
 #include <stdlib.h>
 #include <unistd.h>
 #include <SDL/SDL.h>
 #include <SDL/SDL_image.h>
 #include <SDL/SDL_rotozoom.h>
+#include <SDL/SDL_ttf.h>
 
 #define TRUE 1
 #define FALSE 0
 #define SCREENWIDTH 320
 #define SCREENHEIGHT 240
 #define SCREENBPP 32
-#define SMOOTHING_OFF	0
-#define SMOOTHING_ON	1
+#define SMOOTHING_OFF   0
+#define SMOOTHING_ON    1
 #define PANSTEP 40
-#define ZOOMSTEP 0.05
+#define ZOOMSTEP 1.2
+#define SLIDESHOWTIMEOUT 1000 * 5
+#define VERSION "0.3.0"
+
+void quit()
+{
+    TTF_Quit();
+    SDL_Quit();
+
+    exit(1);
+}
+
+SDL_Surface *initScreen()
+{
+    // Initialize the SDL library 
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) < 0) 
+    {
+        fprintf(stderr,	"\n Couldn't initialize SDL: %s\n\n", SDL_GetError());
+        quit();
+    }
+
+    // Set video mode
+    SDL_Surface *screen = SDL_SetVideoMode(SCREENWIDTH, SCREENHEIGHT, SCREENBPP,
+                                           SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_HWACCEL);
+    if (screen == (SDL_Surface *) (NULL)) 
+    {
+        fprintf(stderr, "Couldn't set %dx%dx%d video mode: %s\n\n", SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_GetError());
+        quit();
+    }
+
+    // Can't stand the useless arrow... Ben has no pointing device
+    SDL_ShowCursor(SDL_DISABLE);	
+
+    TTF_Init();
+
+    return screen;
+}
+
+SDL_Surface *loadImage(char *filename)
+{
+    // Load Picture
+    SDL_Surface *tmp = IMG_Load(filename);
+    if (tmp == (SDL_Surface *) (NULL)) 
+    {
+        fprintf(stderr, "\n Couldn't load image file %s: %s\n\n", filename, SDL_GetError());
+        quit();
+    }
+
+    // Auto rotate image to fit screen
+    //if (tmp->w > SCREENWIDTH || tmp->h > SCREENHEIGHT) {
+    //    if (tmp->h > tmp->w * 1.1) {
+    //        SDL_Surface *t = rotateSurface90Degrees(tmp, 3);
+    //        SDL_FreeSurface(tmp);
+    //        tmp = t;
+    //    }
+    //}
+
+    // Convert picture in same format as video framebuffer, to optimize blit performances
+    SDL_Surface *picture = SDL_DisplayFormat(tmp);
+    if (picture == (SDL_Surface *) (NULL)) 
+    {
+        fprintf(stderr, "\n Internal error from DisplayFormat\n\n");
+        quit();
+    }
+    SDL_FreeSurface(tmp);
+
+    return picture;
+}
+
+void pan(SDL_Surface *image, SDL_Rect *pos, int dx, int dy)
+{
+    if (image->w > SCREENWIDTH) {
+        pos->x += dx;
+        if (pos->x < 0) {
+            pos->x = 0;
+        }
+        if (pos->x >= image->w - SCREENWIDTH) {
+            pos->x = (Sint16) (image->w - SCREENWIDTH);
+        }
+    } else {
+        pos->x = 0;
+    }
+    if (image->h > SCREENHEIGHT) {
+        pos->y += dy;
+        if (pos->y < 0) {
+            pos->y = 0;
+        }
+        if (pos->y >= image->h - SCREENHEIGHT) {
+            pos->y = (Sint16) (image->h - SCREENHEIGHT);
+        }
+    } else {
+        pos->y = 0;
+    }
+}
+
+SDL_Surface *zoomIn(SDL_Surface *image, SDL_Rect *pos, double *scale)
+{
+    *scale *= ZOOMSTEP;
+
+    SDL_Surface *result = zoomSurface(image, *scale, *scale, SMOOTHING_ON);
+    if (result == (SDL_Surface *) (NULL))
+    {
+        fprintf(stderr, "\n Error from zoomSurface()\n\n");
+        quit();
+    }
+
+    pos->x *= ZOOMSTEP;
+    int dx = SCREENWIDTH * (ZOOMSTEP-1) * 0.5;
+    pos->y *= ZOOMSTEP;
+    int dy = SCREENHEIGHT * (ZOOMSTEP-1) * 0.5;
+    pan(result, pos, dx, dy);
+
+    return result;
+}
+
+SDL_Surface *zoomOut(SDL_Surface *image, SDL_Rect *pos, double *scale)
+{
+    *scale /= ZOOMSTEP;
+
+    SDL_Surface *result = zoomSurface(image, *scale, *scale, SMOOTHING_ON);
+    if (result == (SDL_Surface *) (NULL))
+    {
+        fprintf(stderr, "\n Error from zoomSurface()\n\n");
+        quit();
+    }
+
+    pos->x += SCREENWIDTH * (1-ZOOMSTEP) * 0.5;
+    pos->x /= ZOOMSTEP;
+    pos->y += SCREENHEIGHT * (1-ZOOMSTEP) * 0.5;
+    pos->y /= ZOOMSTEP;
+    pan(result, pos, 0, 0);
+
+    return result;
+}
+
+SDL_Surface *zoomFit(SDL_Surface *image, SDL_Rect *pos, double *scale)
+{
+    pos->x = 0;
+    pos->y = 0;
+    double scale_x = (double) (SCREENWIDTH) / (double) (image->w);
+    double scale_y = (double) (SCREENHEIGHT) / (double) (image->h);
+    if (scale_y < scale_x) {
+        *scale = scale_y;
+    } else {
+        *scale = scale_x;
+    }
+
+    SDL_Surface *result = zoomSurface(image, *scale, *scale, SMOOTHING_ON);
+    if (result == (SDL_Surface *) (NULL))
+    {
+        fprintf(stderr, "\n Error from zoomSurface()\n\n");
+        quit();
+    }
+
+    return result;
+}
+
+SDL_Surface *zoom100(SDL_Surface *image, SDL_Rect *pos, double *scale)
+{
+    SDL_Surface *result = SDL_ConvertSurface(image, image->format, image->flags);
+    if (result == (SDL_Surface *) (NULL))
+    {
+        fprintf(stderr, "\n Error from ConvertSurface()\n\n");
+        quit();
+    }
+
+    if (*scale < 1.0) {
+        pos->x /= *scale;
+        pos->y /= *scale;
+        pos->x -= SCREENWIDTH * (1-(1 / *scale)) * 0.5;
+        pos->y -= SCREENHEIGHT * (1-(1 / *scale)) * 0.5;
+    } else {
+        pos->x += SCREENWIDTH * (1-*scale) * 0.5;
+        pos->y += SCREENHEIGHT * (1-*scale) * 0.5;
+        pos->x /= *scale;
+        pos->y /= *scale;
+    }
+    pan(result, pos, 0, 0);
+    *scale = 1.0;
+
+    return result;
+}
+
+SDL_Surface *drawFileName(char *filename, TTF_Font *font, int slideShow)
+{
+    if(font) {
+        SDL_Color foregroundColor = { 0, 0, 0, 0 }; 
+        SDL_Color backgroundColor = { 200, 200, 200, 0 };
+
+        char text[strlen(filename)+4];
+        strcpy(text, filename);
+        if (slideShow) {
+            strcat(text, " >>");
+        }
+        return TTF_RenderText_Shaded(font, text, foregroundColor, backgroundColor);
+    }
+    return NULL;
+}
+
+void drawImage(SDL_Surface *image, SDL_Rect *pos, SDL_Surface *screen, SDL_Surface *filename)
+{
+    SDL_FillRect(screen, (SDL_Rect *) NULL, 0);	// draw background color (black)
+
+    SDL_Rect screenPos;
+    if (image->w < SCREENWIDTH) {
+        screenPos.x = (SCREENWIDTH - image->w) / 2;
+    } else {
+        screenPos.x = 0;
+    }
+    if (image->h < SCREENHEIGHT) {
+        screenPos.y = (SCREENHEIGHT - image->h) / 2;
+    } else {
+        screenPos.y = 0;
+    }
+    SDL_BlitSurface(image, pos, screen, &screenPos); 
+
+    if(filename) {
+        SDL_Rect textLocation = { 0, 0, 0, 0 };
+        if (filename->w > SCREENWIDTH) {
+            textLocation.x = SCREENWIDTH - filename->w;
+        }
+        SDL_BlitSurface(filename, NULL, screen, &textLocation);
+    }
+
+    SDL_Flip(screen);
+}
+
+Uint32 timerCallback(Uint32 interval, void *param)
+{
+    param = NULL;
+    SDL_Event event;
+    SDL_KeyboardEvent keyEvent;
+
+    keyEvent.type = SDL_KEYDOWN;
+    keyEvent.keysym.unicode = 0;
+    keyEvent.keysym.scancode = 0;
+    keyEvent.keysym.mod = 0;
+    keyEvent.keysym.sym = SDLK_n;
+
+    event.type = SDL_KEYDOWN;
+    event.key = keyEvent;
+
+    SDL_PushEvent(&event);
+
+    return interval;
+}
 
 int main(int argc, char *argv[])
 {
-	SDL_Surface 		*screen 	= NULL,
-				*scaled_img 	= NULL,
-				*temp_img 	= NULL,
-	 			*picture    	= NULL;
-	SDL_Event 		event;
-	SDL_Rect 		picturePortion,
-				screenPortion;
-	int 			imgWidth,
-				imgHeight,
-				smoothing	= SMOOTHING_ON,
-				fPressed,
-				zPressed,
-				iPressed,
-				oPressed,
-				alreadyFit,
-				pixelFit,
-				lPressed, 
-				rPressed, 	
-				leftPressed, 
-				rightPressed, 
-				upPressed, 
-				downPressed;
-	char *			sFilename;
-	char			sVersion[]	= "0.2.1";
-	double			scale_x 	= 1.0, 
-				scale_y 	= 1.0, 
-				scale 		= 1.0;
+    SDL_Surface *screen      = NULL,
+                *image       = NULL,
+                *scaledImage = NULL,
+                *name        = NULL;
+    SDL_Rect     picturePortion;
+    TTF_Font    *font = NULL;
+    double       scale = 1.0;
+    int          currentImageNumber = 1,
+                 showFileName = TRUE,
+                 runSlideShow = FALSE,
+                 isRunning = TRUE;
+    SDL_TimerID  slideShowTimer = 0;
 
+    // Process command line
+    if (argc < 2) {
+        fprintf(stderr,  "\n"
+            " imgv v%s. Syntax: imgv <image files>\n\n"
+            " Hotkeys:\n"
+            " 'f' fit to screen\n"
+            " 'z' zoom at pixel level\n"
+            " 'i' zoom in  'o' zoom out\n"
+            " 'l' rotate left  'r' rotate right\n"
+            " 'n' next image  'p' previous image\n"
+            " 'd' show / hide file name\n"
+            " 's' start / stop slide show\n"
+            " 'arrows' pan  'ESC' quit\n\n", VERSION);
+        exit(0);
+    }
 
-	atexit(SDL_Quit);
+    screen = initScreen();
 
-	// Process command line
-	if (argc != 2)
-	{
-		fprintf (stderr,  "\n"
-			 " imgv v%s. Syntax: imgv <image file>\n\n"
-			 " Hotkeys:\n"
-			 " 'f' fit to screen\n"
-			 " 'z' zoom at pixel level\n"
-			 " 'i' zoom in  'o' zoom out\n"
-			 " 'l' rotate left  'r' rotate right\n"
-			 " 'arrows' pan  'ESC' quit\n\n", sVersion);
-		exit (1);
-	}
-	sFilename = argv[1];
+    font = TTF_OpenFont("font.ttf", 11);
+    if (font == (TTF_Font *) (NULL)) {
+        font = TTF_OpenFont("/usr/share/imgv/font.ttf", 11);
+    }
+    if (font == (TTF_Font *) (NULL)) {
+        font = TTF_OpenFont("/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf", 11);
+    }
 
-	// Initialize the SDL library 
-	if (SDL_Init(SDL_INIT_VIDEO) < 0) 
-	{
-		fprintf(stderr,	"\n Couldn't initialize SDL: %s\n\n", SDL_GetError());
-		exit(1);
-	}
+    picturePortion.w = SCREENWIDTH;
+    picturePortion.h = SCREENHEIGHT;
 
-	// Load Picture
-	temp_img = IMG_Load(sFilename);
-	if (temp_img == (SDL_Surface *) (NULL)) 
-	{
-		fprintf(stderr, "\n Couldn't load image file %s: %s\n\n", sFilename, SDL_GetError());
-		exit (1);
-	}
+    image = loadImage(argv[1]);
+    if (image->w < SCREENWIDTH && image->h < SCREENHEIGHT) {
+        scaledImage = zoom100(image, &picturePortion, &scale);
+    } else {
+        scaledImage = zoomFit(image, &picturePortion, &scale);
+    }
+    name = drawFileName(argv[currentImageNumber], font, runSlideShow);
+    drawImage(scaledImage, &picturePortion, screen, name);
 
-	// Set video mode
-	screen = SDL_SetVideoMode 
-		(SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_HWACCEL);
-	if (screen == (SDL_Surface *) (NULL)) 
-	{
-		fprintf(stderr, "Couldn't set %dx%dx%d video mode: %s\n\n", SCREENWIDTH, SCREENHEIGHT, SCREENBPP, SDL_GetError());
-		exit(1);
-	}
-	
-	// Can't stand the useless arrow... Ben has no pointing device
-	SDL_ShowCursor(SDL_DISABLE);	
+    do {
+        SDL_Event event;
+        if (SDL_WaitEvent(&event) && event.type == SDL_KEYDOWN) {
+            switch (event.key.keysym.sym) {
+                case SDLK_LEFT: // PAN LEFT
+                    pan(scaledImage, &picturePortion, -PANSTEP, 0);
+	                break;
+                case SDLK_RIGHT: // PAN RIGHT
+                    pan(scaledImage, &picturePortion, PANSTEP, 0);
+                    break;
+                case SDLK_UP: // PAN UP
+                    pan(scaledImage, &picturePortion, 0, -PANSTEP);
+                    break;
+                case SDLK_DOWN: // PAN DOWN
+                    pan(scaledImage, &picturePortion, 0, PANSTEP);
+                    break;
+                case SDLK_i: // ZOOM IN
+                    SDL_FreeSurface(scaledImage);
+                    scaledImage = zoomIn(image, &picturePortion, &scale);
+                    break;
+                case SDLK_o: // ZOOM OUT
+                    SDL_FreeSurface(scaledImage);
+                    scaledImage = zoomOut(image, &picturePortion, &scale);
+                    break;
+                case SDLK_f: // ZOOM TO FIT SCREEN
+                    SDL_FreeSurface(scaledImage);
+                    scaledImage = zoomFit(image, &picturePortion, &scale);
+                    break;
+                case SDLK_z: // ZOOM TO ORIGINAL SIZE
+                    SDL_FreeSurface(scaledImage);
+                    scaledImage = zoom100(image, &picturePortion, &scale);
+                    break;
+                case SDLK_l: // ROTATE LEFT
+                    {
+                        SDL_FreeSurface(scaledImage);
+                        SDL_Surface *tmp = rotateSurface90Degrees(image, 3);
+                        SDL_FreeSurface(image);
+                        image = tmp;
+                        scaledImage = zoomSurface(image, scale, scale, SMOOTHING_ON);
+                        int x = picturePortion.x;
+                        picturePortion.x = picturePortion.y + SCREENHEIGHT/2 - SCREENWIDTH/2;
+                        picturePortion.y = scaledImage->h - x - SCREENHEIGHT/2 - SCREENWIDTH/2;
+                        pan(scaledImage, &picturePortion, 0, 0);
+                    }
+                    break;
+                case SDLK_r: // ROTATE RIGHT
+                    {
+                        SDL_FreeSurface(scaledImage);
+                        SDL_Surface *tmp = rotateSurface90Degrees(image, 1);
+                        SDL_FreeSurface(image);
+                        image = tmp;
+                        scaledImage = zoomSurface(image, scale, scale, SMOOTHING_ON);
+                        int x = picturePortion.x;
+                        picturePortion.x = scaledImage->w - picturePortion.y - SCREENWIDTH/2
+                                           - SCREENHEIGHT/2;
+                        picturePortion.y = x + SCREENWIDTH/2 - SCREENHEIGHT/2;
+                        pan(scaledImage, &picturePortion, 0, 0);
+                    }
+                    break;
+                case SDLK_n: // NEXT IMAGE
+                    if (currentImageNumber < argc-1) {
+                        ++currentImageNumber;
 
-	// Convert picture in same format as video framebuffer, to optimize blit performances
-	picture = SDL_DisplayFormat (temp_img);
-	if (picture == (SDL_Surface *) (NULL)) 
-	{
-		fprintf(stderr, "\n Internal error from DisplayFormat\n\n");
-		exit (1);
-	}
-	SDL_FreeSurface (temp_img);
-	
-	imgWidth 	= picture->w;
-	imgHeight	= picture->h;
+                        SDL_FreeSurface(image);
+                        SDL_FreeSurface(scaledImage);
+                        SDL_FreeSurface(name);
 
-	// Starting point (default view): uniform scaling to best screen fit, keep aspect ratio
-	scale_x		= (double) (SCREENWIDTH) / (double) (imgWidth);
-	scale_y		= (double) (SCREENHEIGHT) / (double) (imgHeight);
-	if (scale_y < scale_x)
-		scale = scale_y;
-	else
-		scale = scale_x;
-	scaled_img = zoomSurface (picture, scale, scale, SMOOTHING_ON);
-	if (scaled_img == (SDL_Surface *) (NULL))
-	{
-		fprintf (stderr, "\n Error from zoomSurface()\n\n");
-		exit (1);
-	}
-	
-	screenPortion.x 	= 0;	// destination coordinates: origin
-	screenPortion.y 	= 0;
-	picturePortion.x	= 0;
-	picturePortion.y	= 0;
-	picturePortion.w	= (Uint16) imgWidth;
-	picturePortion.h	= (Uint16) imgHeight;
+                        image = loadImage(argv[currentImageNumber]);
+                        if (image->w < SCREENWIDTH && image->h < SCREENHEIGHT) {
+                            scaledImage = zoom100(image, &picturePortion, &scale);
+                        } else {
+                            scaledImage = zoomFit(image, &picturePortion, &scale);
+                        }
+                        name = drawFileName(argv[currentImageNumber], font, runSlideShow);
+                    } else {
+                        if (runSlideShow) {
+                            SDL_RemoveTimer(slideShowTimer);
+                            runSlideShow = FALSE;
+                            name = drawFileName(argv[currentImageNumber], font, runSlideShow);
+                        }
+                    }
+                    break;
+                case SDLK_p: // PREVIOUS IMAGE
+                    if (currentImageNumber > 1) {
+                        --currentImageNumber;
 
-	// off-cycle: first image drawing
-	SDL_FillRect(screen, NULL, 0);	// draw background color (black)
-	SDL_BlitSurface(scaled_img, &picturePortion, screen, &screenPortion); 
-	SDL_Flip(screen);
-	
-	leftPressed 		= FALSE;
-	rightPressed 		= FALSE;
-	upPressed 		= FALSE;
-	downPressed 		= FALSE;
-	fPressed		= FALSE;
-	zPressed		= FALSE;
-	lPressed		= FALSE;
-	rPressed		= FALSE;
-	iPressed		= FALSE;
-	oPressed		= FALSE;
-	pixelFit		= FALSE;
-	alreadyFit		= TRUE;
+                        SDL_FreeSurface(image);
+                        SDL_FreeSurface(scaledImage);
+                        SDL_FreeSurface(name);
 
-	while(1) 
-	{
-		if (SDL_WaitEvent( &event ))
-		{
-			// We only process SDL_KEYDOWN and SDL_KEYUP events 
-			switch (event.type)
-			{
-		  		case SDL_KEYDOWN:
-			  		switch (event.key.keysym.sym) 
-					{
-		  				case SDLK_LEFT:
-			  				leftPressed = TRUE;
-			  			break;
-		  				case SDLK_RIGHT:
-			  				rightPressed = TRUE;
-			  			break;
-		  				case SDLK_DOWN:
-			  				downPressed = TRUE;
-			  			break;
-		  				case SDLK_f:
-			  				fPressed = TRUE;
-			  			break;
-		  				case SDLK_z:
-			  				zPressed = TRUE;
-			  			break;
-		  				case SDLK_i:
-			  				iPressed = TRUE;
-			  			break;
-		  				case SDLK_o:
-			  				oPressed = TRUE;
-			  			break;
-		  				case SDLK_l:
-			  				lPressed = TRUE;
-			  			break;
-		  				case SDLK_r:
-			  				rPressed = TRUE;
-			  			break;
-		  				case SDLK_UP:
-			  				upPressed = TRUE;
-			  			break;
-		  				case SDLK_ESCAPE:
-							if (picture)
-								SDL_FreeSurface (picture);
-							if (scaled_img)
-								SDL_FreeSurface (scaled_img);
-							if (screen)
-								SDL_FreeSurface (screen);
-			  				exit(0);
-		  				default:
-			  			break;
-			  		}
-			  	break;
-		 		case SDL_KEYUP:
-			  		switch (event.key.keysym.sym) 
-					{
-		  				case SDLK_LEFT:
-			  				leftPressed = FALSE;
-			  			break;
-		  				case SDLK_RIGHT:
-			  				rightPressed = FALSE;
-			  			break;
-		  				case SDLK_DOWN:
-			  				downPressed = FALSE;
-			  			break;
-		  				case SDLK_UP:
-			  				upPressed = FALSE;
-			  			break;
-		  				case SDLK_f:
-			  				fPressed = FALSE;
-			  			break;
-		  				case SDLK_z:
-			  				zPressed = FALSE;
-			  			break;
-		  				case SDLK_i:
-			  				iPressed = FALSE;
-			  			break;
-		  				case SDLK_o:
-			  				oPressed = FALSE;
-			  			break;
-		  				case SDLK_l:
-			  				lPressed = FALSE;
-			  			break;
-		  				case SDLK_r:
-			  				rPressed = FALSE;
-			  			break;
-		  				default:
-			  			break;
-			  		}
-			  	break;
-			} // end of switch (event.type)
+                        image = loadImage(argv[currentImageNumber]);
+                        if (image->w < SCREENWIDTH && image->h < SCREENHEIGHT) {
+                            scaledImage = zoom100(image, &picturePortion, &scale);
+                        } else {
+                            scaledImage = zoomFit(image, &picturePortion, &scale);
+                        }
+                        name = drawFileName(argv[currentImageNumber], font, runSlideShow);
+                    }
+                    break;
+                case SDLK_s: // START / STOP SLIDESHOW
+                    runSlideShow = 1 - runSlideShow;
+                    name = drawFileName(argv[currentImageNumber], font, runSlideShow);
+                    if (runSlideShow) {
+                        slideShowTimer = SDL_AddTimer(SLIDESHOWTIMEOUT, timerCallback, NULL);
+                    } else {
+                        SDL_RemoveTimer(slideShowTimer);
+                    }
+                    break;
+                case SDLK_d: // SHOW / HIDE FILENAME
+                    showFileName = 1 - showFileName;
+                    break;
+                case SDLK_ESCAPE: // QUIT
+                case SDLK_q:
+                    isRunning = FALSE;
+                    break;
+                default:
+                    break;
+             } // end of switch (event.key.keysym.sym)
+        } // end of if(SDL_WaitEvent())
+        drawImage(scaledImage, &picturePortion, screen, showFileName ? name : 0);
+    } while(isRunning); // end of do
 
-			// Process commands
-			if (fPressed && !alreadyFit)
-			{	// Fit image to screen
-				if (scaled_img != (SDL_Surface *) (NULL))
-					SDL_FreeSurface (scaled_img);	// since zoomSurface() creates a new surface every time
-				alreadyFit 	= TRUE;
-				pixelFit   	= FALSE;
-				scale_x		= (double) (SCREENWIDTH) / (double) (imgWidth);
-				scale_y		= (double) (SCREENHEIGHT) / (double) (imgHeight);
-				if (scale_y < scale_x)
-					scale = scale_y;
-				else
-					scale = scale_x;
-				picturePortion.x = 0;
-				picturePortion.y = 0;
-				picturePortion.w = (Uint16) imgWidth;
-				picturePortion.h = (Uint16) imgHeight;
-				scaled_img = zoomSurface (picture, scale, scale, smoothing);
-				if (scaled_img == (SDL_Surface *) (NULL))
-				{
-					fprintf (stderr, "\n Error from zoomSurface()\n\n");
-					exit (1);
-				}
-			}
-			if (zPressed && !pixelFit)
-			{	// Zoom at 1:1 (100% zoom / actual pixels)
-				if (scaled_img != (SDL_Surface *) (NULL))
-					SDL_FreeSurface (scaled_img);
-				alreadyFit = FALSE;
-				pixelFit   = TRUE;
-				picturePortion.w = (Uint16) SCREENWIDTH;
-				picturePortion.h = (Uint16) SCREENHEIGHT;
-				scale 	   = 1.0;
-				scaled_img = SDL_ConvertSurface (picture, picture->format, picture->flags);
-				if (scaled_img == (SDL_Surface *) (NULL))
-				{
-					fprintf (stderr, "\n Error from ConvertSurface()\n\n");
-					exit (1);
-				}
-			}
-			if (iPressed)
-			{	// Zoom in
-				if (scaled_img != (SDL_Surface *) (NULL))
-					SDL_FreeSurface (scaled_img);
-				alreadyFit = FALSE;
-				pixelFit   = FALSE;
-				scale += ZOOMSTEP;
-				picturePortion.w = (Uint16) ((double) (imgWidth) * scale);
-				if ( (picturePortion.w - picturePortion.x) >= imgWidth )
-					picturePortion.w = imgWidth - picturePortion.x;
-				if (picturePortion.w < 1)
-					picturePortion.w = 1;
-				picturePortion.h = (Uint16) ((double) (imgHeight) * scale);
-				if ( (picturePortion.h - picturePortion.y) >= imgHeight )
-					picturePortion.h = imgHeight - picturePortion.y;
-				if (picturePortion.h < 1)
-					picturePortion.h = 1;
-				scaled_img = zoomSurface (picture, scale, scale, smoothing);
-				//scaled_img = rotozoomSurface (picture, 0, scale, SMOOTHING_ON);		
-				
-				if (scaled_img == (SDL_Surface *) (NULL))
-				{
-					fprintf (stderr, "\n Error from zoomSurface()\n\n");
-					exit (1);
-				}
-			}
-			if (oPressed)
-			{	// Zoom out
-				if (scaled_img != (SDL_Surface *) (NULL))
-					SDL_FreeSurface (scaled_img);
-				alreadyFit = FALSE;
-				pixelFit   = FALSE;
-				scale -= ZOOMSTEP;
-				if (scale <= 0.0)
-					scale = 0.01;
-				picturePortion.w = (Uint16) ((double) (imgWidth) * scale);
-				if ( (picturePortion.w - picturePortion.x) >= imgWidth)
-					picturePortion.w = imgWidth - picturePortion.x;
-				if (picturePortion.w < 1)
-					picturePortion.w = 1;
-				picturePortion.h = (Uint16) ((double) (imgHeight) * scale);
-				if ( (picturePortion.h - picturePortion.y) >= imgHeight )
-					picturePortion.h = imgHeight - picturePortion.y;
-				if (picturePortion.h < 1)
-					picturePortion.h = 1;
-					
-				scaled_img = zoomSurface (picture, scale, scale, smoothing);
-				//scaled_img = rotozoomSurface (picture, 0, scale, SMOOTHING_ON);
-				if (scaled_img == (SDL_Surface *) (NULL))
-				{
-					fprintf (stderr, "\n Error from zoomSurface()\n\n");
-					exit (1);
-				}
-			}
+    SDL_FreeSurface(image);
+    SDL_FreeSurface(scaledImage);
+    SDL_FreeSurface(screen);
 
-			if (lPressed)
-			{	// Rotate left 90°
-				if (scaled_img != (SDL_Surface *) (NULL))
-					temp_img   = scaled_img;
-				else
-				{
-					fprintf (stderr, "\n Error: NULL scaled_img\n\n");
-					exit (1);
-				}		
-				alreadyFit = FALSE;
-				scaled_img = rotozoomSurface (temp_img, -90, 1.0, SMOOTHING_OFF);
-				SDL_FreeSurface (temp_img);
-				if (scaled_img == (SDL_Surface *) (NULL))
-				{
-					fprintf (stderr, "\n Error from rotozoomSurface()\n\n");
-					exit (1);
-				}		
-			}
-			if (rPressed)
-			{	// Rotate right 90°
-				if (scaled_img != (SDL_Surface *) (NULL))
-					temp_img   = scaled_img;
-				else
-				{
-					fprintf (stderr, "\n Error: NULL scaled_img\n\n");
-					exit (1);
-				}		
-				alreadyFit = FALSE;
-				scaled_img = rotozoomSurface (temp_img, 90, 1.0, SMOOTHING_OFF);
-				SDL_FreeSurface (temp_img);
-				if (scaled_img == (SDL_Surface *) (NULL))
-				{
-					fprintf (stderr, "\n Error from rotozoomSurface()\n\n");
-					exit (1);
-				}		
-			}
-			
-			if (leftPressed) 
-			{
-				picturePortion.x -= PANSTEP;
-				if (picturePortion.x < 0)
-					picturePortion.x = 0;
-				alreadyFit = FALSE;
-			}
-			if (rightPressed) 
-			{
-				picturePortion.x += PANSTEP;
-				if (picturePortion.x >= imgWidth)
-					picturePortion.x = (Sint16) (imgWidth - 1);
-				alreadyFit = FALSE;
-			}
-			if (upPressed) 
-			{
-				picturePortion.y -= PANSTEP;
-				if (picturePortion.y < 0)
-					picturePortion.y = 0;
-				alreadyFit = FALSE;
-			}
-			if (downPressed) 
-			{
-				picturePortion.y += PANSTEP;
-				if (picturePortion.y >= imgHeight)
-					picturePortion.y = (Sint16) (imgHeight - 1);
-				alreadyFit = FALSE;
-			}
+    TTF_CloseFont(font);
+    TTF_Quit();
 
-			SDL_FillRect(screen, (SDL_Rect *) NULL, 0);	// draw background color (black)
-			SDL_BlitSurface(scaled_img, &picturePortion, screen, &screenPortion); 
-			SDL_Flip(screen);
-		} // end of if(SDL_WaitEvent())
-	}	// end of while(1)
+    SDL_Quit();
 
-	return 0;
+    return 0;
 }
 
